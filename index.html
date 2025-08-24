@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>GitHub Release Uploader – Live</title>
+<style>
+  body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 24px; }
+  .card { max-width: 760px; margin: 0 auto; padding: 20px; border: 1px solid #e5e7eb; border-radius: 16px; box-shadow: 0 4px 16px rgba(0,0,0,.06); }
+  h1 { margin: 0 0 16px; font-size: 22px; }
+  label { display:block; font-size: 13px; color:#374151; margin: 12px 0 6px; }
+  input { width:100%; padding:12px 14px; border:1px solid #d1d5db; border-radius:12px; font-size:14px; }
+  button { margin-top:14px; padding:12px 16px; font-size:14px; border:none; border-radius:12px; background:#111827; color:#fff; cursor:pointer; }
+  button:disabled { opacity:.6; cursor:not-allowed; }
+  .log { background:#0b1020; color:#cbd5e1; padding:12px; margin-top:16px; border-radius:12px; height:260px; overflow:auto; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; font-size:12px; line-height:1.5; }
+  .ok { color:#86efac; }
+  .warn { color:#fde047; }
+  .err { color:#fca5a5; }
+  .badge { display:inline-block; padding:2px 8px; border-radius:999px; background:#111827; color:#e5e7eb; font-size:12px; margin-left:8px; }
+  .link { margin-top:12px; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>Upload to GitHub Release <span id="status" class="badge">idle</span></h1>
+
+    <label>File URL</label>
+    <input id="url" placeholder="https://example.com/video.mp4" />
+
+    <label>Release Tag</label>
+    <input id="tag" placeholder="v1.0.0" />
+
+    <label>File Name (as asset)</label>
+    <input id="name" placeholder="video.mp4" />
+
+    <button id="go">Start Upload</button>
+
+    <div class="log" id="log"></div>
+    <div class="link" id="final"></div>
+  </div>
+
+<script>
+const WORKER_BASE = "https://upload.bb-2d5.workers.dev/"; // e.g. https://my-worker.example.workers.dev
+
+const logEl = document.getElementById("log");
+const statusEl = document.getElementById("status");
+const finalEl = document.getElementById("final");
+const btn = document.getElementById("go");
+
+function log(line, cls = "") {
+  const el = document.createElement("div");
+  if (cls) el.className = cls;
+  el.textContent = line;
+  logEl.appendChild(el);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function setStatus(s) { statusEl.textContent = s; }
+
+btn.addEventListener("click", () => {
+  const file_url = document.getElementById("url").value.trim();
+  const release_tag = document.getElementById("tag").value.trim();
+  const file_name = document.getElementById("name").value.trim();
+  finalEl.textContent = "";
+  logEl.textContent = "";
+
+  if (!file_url || !release_tag || !file_name) {
+    log("Please fill all fields.", "warn");
+    return;
+  }
+
+  btn.disabled = true;
+  setStatus("starting");
+  log("Connecting to worker ...");
+
+  // Build SSE URL with query params
+  const u = new URL("/sse", WORKER_BASE);
+  u.searchParams.set("file_url", file_url);
+  u.searchParams.set("release_tag", release_tag);
+  u.searchParams.set("file_name", file_name);
+
+  const es = new EventSource(u.toString());
+
+  es.onmessage = (e) => {
+    const msg = e.data || "";
+    if (msg.startsWith("[info]")) log(msg, "");
+    else if (msg.startsWith("[ok]")) log(msg, "ok");
+    else if (msg.startsWith("[wait]")) log(msg, "");
+    else if (msg.startsWith("[status]")) {
+      const s = msg.replace("[status]","").trim();
+      setStatus(s);
+      log(`workflow status: ${s}`, "");
+    }
+    else if (msg.startsWith("[job]")) log(msg.replace("[job]","job:"), "");
+    else if (msg.startsWith("[done]")) {
+      const c = msg.replace("[done]","").trim();
+      log(`completed ${c}`, "ok");
+      setStatus("completed");
+    }
+    else if (msg.startsWith("[asset]")) {
+      const href = msg.replace("[asset]","").trim();
+      finalEl.innerHTML = `Direct download: <a href="${href}" target="_blank" rel="noopener">${href}</a>`;
+      log("asset url ready", "ok");
+    }
+    else if (msg.startsWith("[link]")) {
+      const href = msg.replace("[link]","").trim();
+      log(`run: ${href}`, "");
+    }
+    else if (msg.startsWith("[warn]")) log(msg, "warn");
+    else if (msg.startsWith("[error]")) log(msg, "err");
+    else if (msg.startsWith("[fatal]")) { log(msg, "err"); setStatus("error"); }
+    else if (msg.startsWith("[end]")) {
+      es.close();
+      btn.disabled = false;
+    } else {
+      log(msg);
+    }
+  };
+
+  es.onerror = (err) => {
+    log("SSE connection error.", "err");
+    setStatus("error");
+    es.close();
+    btn.disabled = false;
+  };
+});
+</script>
+</body>
+</html>
